@@ -33,15 +33,15 @@ mutable struct ContinuousPlannerPOMCGS
     _epsilon::Float64                            # default 0.01
     _Q_learning_policy::Qlearning
     _Log_result::LogResult
-    _C_star::Int64                              # default 50
-    _k_a::Float64                                # default 2.0
-    _alpha_a::Float64                            # default 0.5
+    _C_star::Int64                               # default 50
+    _k_a::Float64                                # default 5.0
+    _alpha_a::Float64                            # default 0.2
     _bool_APW::Bool                              # default false
-    _bool_discrete_obs::Bool                     # default false
-    _max_planning_secs::Int64                     # default 1e5
+    _bool_discrete_obs::Bool                     # default false 
+    _max_planning_secs::Int64                    # default 1e5
     _nb_eval::Int64                              # default 100000
     _nb_sim::Int64                               # default 1000
-    ContinuousPlannerPOMCGS(max_min_r, Q_learning_policy::Qlearning) = new(10000, 0.05, 1e6, 1e7, 3.0, 0.9, 10, false, false, 2, Vector{Float64}(), max_min_r, 0.01, Q_learning_policy, LogResult(Vector{Int64}(),Vector{Float64}(),Vector{Float64}(),Vector{Float64}(),Vector{Float64}(),Vector{Int64}()), 50, 2.0, 0.5, false, false, 1e5, 10000, 1000)
+    ContinuousPlannerPOMCGS(max_min_r, Q_learning_policy::Qlearning) = new(10000, 0.05, 1e6, 1e7, 3.0, 0.9, 10, false, false, 2, Vector{Float64}(), max_min_r, 0.01, Q_learning_policy, LogResult(Vector{Int64}(),Vector{Float64}(),Vector{Float64}(),Vector{Float64}(),Vector{Float64}(),Vector{Int64}()), 50, 2.0, 0.2, false, false, 1e5, 10000, 1000)
 end
 
 function InitPlannerParameters(planner::ContinuousPlannerPOMCGS,
@@ -64,8 +64,42 @@ function InitPlannerParameters(planner::ContinuousPlannerPOMCGS,
 end
 
 
-function ProcessActionWeightedParticle(bool_state_grid, 
+function CollectSamples(bool_state_grid::Bool, 
+                        state_grid,
+                        bool_discrete_obs::Bool,
+                        bool_PCA::Bool,
+                        PCA_dim::Int64,
+                        pomdp, 
+                        fsc::FSC,
+                        nI::Int64,
+                        a,
+                        nb_process_samples::Int64,
+                        nb_abstract_obs::Int64)
+
+    if bool_discrete_obs
+        return  CollectSamplesAndBuildNewBeliefsWeightedParticles(pomdp,
+                                                                    fsc,
+                                                                    nI,
+                                                                    a,
+                                                                    nb_process_samples)      
+    else
+        return CollectSamplesAndBuildNewBeliefs(bool_state_grid, 
+                                                state_grid,
+                                                bool_PCA,
+                                                PCA_dim,
+                                                pomdp, 
+                                                fsc, 
+                                                nI, 
+                                                a, 
+                                                nb_process_samples, 
+                                                nb_abstract_obs)
+    end
+end
+
+
+function ProcessActionWeightedParticle(bool_state_grid::Bool, 
                                         state_grid,
+                                        bool_discrete_obs::Bool,
                                         bool_PCA::Bool,
                                         PCA_dim::Int64,
                                         pomdp, 
@@ -77,17 +111,20 @@ function ProcessActionWeightedParticle(bool_state_grid,
                                         Q_learning_policy::Qlearning,
                                         nb_abstract_obs::Int64)
 
-    sum_R_a, sum_all_weights, all_oI_weight, all_dict_weighted_samples = CollectSamplesAndBuildNewBeliefs(bool_state_grid, 
-                                                                                                        state_grid,
-                                                                                                        bool_PCA,
-                                                                                                        PCA_dim,
-                                                                                                        pomdp, 
-                                                                                                        fsc, 
-                                                                                                        nI, 
-                                                                                                        a, 
-                                                                                                        nb_process_samples, 
-                                                                                                        nb_abstract_obs)
+    sum_R_a, sum_all_weights, all_oI_weight, all_dict_weighted_samples = CollectSamples(bool_state_grid, 
+                                                                                        state_grid,
+                                                                                        bool_discrete_obs, 
+                                                                                        bool_PCA,
+                                                                                        PCA_dim,
+                                                                                        pomdp, 
+                                                                                        fsc, 
+                                                                                        nI, 
+                                                                                        a, 
+                                                                                        nb_process_samples, 
+                                                                                        nb_abstract_obs)
 
+
+                                                                                                  
     # 4. Build new beliefs 
     fsc._nodes[nI]._R_action[a] = sum_R_a
     expected_future_V = 0.0
@@ -97,10 +134,11 @@ function ProcessActionWeightedParticle(bool_state_grid,
         distance_r = 0.8
         bool_search, n_nextI = SearchOrInsertBelief(fsc, all_dict_weighted_samples[key], -1, distance_r, 1)
         # bool_search, n_nextI = SearchOrInsertBelief(fsc, all_dict_weighted_samples[key], fsc._max_accept_belief_gap)
+        # bool_search, n_nextI = SearchOrInsertBeliefWithPrunnedNodes(fsc, all_dict_weighted_samples[key], fsc._max_accept_belief_gap)
         if !bool_search
             max_value, actions, Q_actions = GetValueQMDP(fsc._nodes[n_nextI]._dict_weighted_samples, fsc._action_space, Q_learning_policy)
             ProcessActions(fsc._nodes[n_nextI], actions)
-            fsc._nodes[n_nextI]._Q_action = Q_actions
+            # fsc._nodes[n_nextI]._Q_action = Q_actions
             fsc._nodes[n_nextI]._V_node = max_value
         end
         fsc._eta[nI][Pair(a, key)] = n_nextI
@@ -140,23 +178,22 @@ function Simulate(pomdp,
                     depth::Int64,
                     bool_state_grid::Bool,
                     state_grid::Vector{Float64},
+                    bool_discrete_obs::Bool,
                     bool_PCA::Bool,
                     PCA_dim::Int64,
                     nb_process_samples::Int64,
                     discount::Float64,
                     c::Float64,
+                    epsilon::Float64,
                     k_a::Float64,
                     alpha_a::Float64,
                     C_star::Int64,
                     bool_APW::Bool,
                     Q_learning_policy::Qlearning,
-                    nb_abstract_obs::Int64,
-                    epsilon::Float64)
+                    nb_abstract_obs::Int64)
 
 
-
-    # if (discount^depth)*(Q_learning_policy._R_max - Q_learning_policy._R_min) / ( 1 - discount) < epsilon || isterminal(pomdp, s)
-    if (discount^depth)*(Q_learning_policy._R_max - Q_learning_policy._R_min) < planner._epsilon || isterminal(pomdp, s)
+    if (discount^depth) < epsilon || isterminal(pomdp, s)
         return 0.0
     end
 
@@ -170,24 +207,33 @@ function Simulate(pomdp,
     fsc._nodes[nI]._visits_node += 1
     fsc._nodes[nI]._visits_action[a] += 1
 
-
     if fsc._nodes[nI]._visits_action[a] == 1
-        return ProcessActionWeightedParticle(bool_state_grid, state_grid, bool_PCA, PCA_dim, pomdp, fsc, nI, a, nb_process_samples, discount, Q_learning_policy, nb_abstract_obs)
+        return ProcessActionWeightedParticle(bool_state_grid, state_grid, bool_discrete_obs, bool_PCA, PCA_dim, pomdp, fsc, nI, a, nb_process_samples, discount, Q_learning_policy, nb_abstract_obs)
     end
 
     nI_next = -1
     sp, o, r = @gen(:sp, :o, :r)(pomdp, s, a)
-    o_vec = convert_o(Vector{Float64}, o, pomdp)
 
-    if bool_PCA 
-        o_vec = predict(fsc._nodes[nI]._PCA_Ms[a], o_vec)
+
+    if !bool_discrete_obs
+        o_vec = convert_o(Vector{Float64}, o, pomdp)
+        if bool_PCA 
+            o_vec = predict(fsc._nodes[nI]._PCA_Ms[a], o_vec)
+        end
+        o = FindMostCloseAbstractObs(o_vec, fsc._nodes[nI]._abstract_observations[a])
     end
 
-    o_processed = FindMostCloseAbstractObs(o_vec, fsc._nodes[nI]._abstract_observations[a])
+
+    # pair_a_o = Pair(a, o)
+    # nI_next = fsc._eta[nI][pair_a_o]
 
 
-    pair_a_o = Pair(a, o_processed)
-    nI_next = fsc._eta[nI][pair_a_o]
+	if haskey(fsc._eta[nI], Pair(a, o))
+		nI_next = fsc._eta[nI][Pair(a, o)]
+	else
+		fsc._eta[nI][Pair(a, fsc._flag_unexpected_obs)] = nI
+		nI_next = nI # could do something smarter..., may be a merged belief node with all possible observations
+	end
 
     # update r(n, a)
     sum_R_n_a = fsc._nodes[nI]._R_action[a] * (nb_process_samples + fsc._nodes[nI]._visits_action[a])
@@ -195,7 +241,7 @@ function Simulate(pomdp,
     fsc._nodes[nI]._R_action[a] = sum_R_n_a / (nb_process_samples + fsc._nodes[nI]._visits_action[a] + 1)
 
 
-    esti_V = fsc._nodes[nI]._R_action[a] + discount * Simulate(pomdp, fsc, sp, nI_next, depth + 1,  bool_state_grid,  state_grid, bool_PCA, PCA_dim,nb_process_samples, discount, c, k_a, alpha_a, C_star, bool_APW, Q_learning_policy, nb_abstract_obs, epsilon)
+    esti_V = fsc._nodes[nI]._R_action[a] + discount * Simulate(pomdp, fsc, sp, nI_next, depth + 1,  bool_state_grid,  state_grid, bool_discrete_obs,  bool_PCA, PCA_dim,nb_process_samples, discount, c, epsilon, k_a, alpha_a, C_star, bool_APW, Q_learning_policy, nb_abstract_obs)
     fsc._nodes[nI]._Q_action[a] = fsc._nodes[nI]._Q_action[a] + ((esti_V - fsc._nodes[nI]._Q_action[a]) / fsc._nodes[nI]._visits_action[a])
     fsc._nodes[nI]._V_node = esti_V
 
@@ -219,52 +265,68 @@ function Search(pomdp,
 	sum_planning_time_secs = 0
     for i in 1:planner._nb_iter
         elapsed_time = @elapsed begin
-            s = rand(b)
-            # @time Simulate(pomdp, 
-            Simulate(pomdp, 
-                    fsc, 
-                    s, 
-                    node_start_index, 
-                    0,
-                    planner._bool_grid_state,
-                    planner._state_grid_distance,
-                    planner._bool_PCA_observation,
-                    planner._out_dimension_PCA,
-                    planner._nb_process_samples,
-                    planner._discount,
-                    planner._softmax_c,
-                    planner._k_a,
-                    planner._alpha_a,
-                    planner._C_star,
-                    planner._bool_APW,
-                    planner._Q_learning_policy,
-                    planner._nb_abstract_obs,
-                    planner._epsilon)
-        end    
-            
-        sum_planning_time_secs += elapsed_time
-    
-        if sum_planning_time_secs > planner._max_planning_secs
-            println("Timeout reached")
-            break
+        s = rand(b)
+        # @time Simulate(pomdp, 
+        Simulate(pomdp, 
+                fsc, 
+                s, 
+                node_start_index, 
+                0,
+                planner._bool_grid_state,
+                planner._state_grid_distance,
+                planner._bool_discrete_obs,
+                planner._bool_PCA_observation,
+                planner._out_dimension_PCA,
+                planner._nb_process_samples,
+                planner._discount,
+                planner._softmax_c,
+                planner._epsilon,
+                planner._k_a,
+                planner._alpha_a,
+                planner._C_star,
+                planner._bool_APW,
+                planner._Q_learning_policy,
+                planner._nb_abstract_obs)
         end
+        # println("Simulate time: $elapsed_time")
+
+        sum_planning_time_secs += elapsed_time
+
+		if sum_planning_time_secs > planner._max_planning_secs
+			println("Timeout reached")
+			break
+		end
+
 
         if i % planner._nb_sim == 0
             println("--- Iter ", i ÷ planner._nb_sim, " ---")
+            # add fsc prunning 
+            fsc._prunned_node_list = Prunning(fsc)
+            println("fsc size:", length(fsc._prunned_node_list))
             # println("fsc size:", length(fsc._nodes))
             push!(planner._Log_result._vec_episodes, i)
             # estimate lower bound with full FSC policy
+            # println("Starts evaluation")
+
+            U = 0.0
+            L = 0.0
             elapsed_time = @elapsed begin
-                avg_sim = EvaluationWithSimulationFSC(pomdp, fsc, discount(pomdp), planner._nb_eval, planner) 
-                # estimate lower bound with partial FSC policy (N(n) > N*)
-                U, L = EvaluateBounds(pomdp, planner._max_min_r, fsc, planner._Q_learning_policy, discount(pomdp), planner._nb_eval, planner._C_star, planner._bool_PCA_observation, planner._epsilon)
+                if !planner._bool_discrete_obs
+                    avg_sim = EvaluationWithSimulationFSC(pomdp, fsc, discount(pomdp), planner._nb_eval, planner) 
+                    U, L = EvaluateBounds(pomdp, planner._max_min_r, fsc, planner._Q_learning_policy, discount(pomdp), planner._nb_eval, planner._C_star, planner._bool_PCA_observation, planner._epsilon)
+                    L =  max(avg_sim, L)
+                else
+                    L = EvaluationWithSimulationFSC(b, pomdp, fsc, discount(pomdp), planner._nb_eval, planner._Log_result._vec_evaluation_value, planner._Log_result._vec_valid_value, planner._Log_result._vec_unvalid_rate)
+                    U = EvaluateUpperBound(b, pomdp, fsc, planner._Q_learning_policy, discount(pomdp), planner._nb_eval, planner._C_star)
+                end
             end
+
             println("L and U evaluation time: $elapsed_time")
-            L =  max(avg_sim, L)
             println("Upper bound value: ", U)
             println("Lower bound value: ", L)
             push!(planner._Log_result._vec_evaluation_value, L)
-            push!(planner._Log_result._vec_fsc_size, length(fsc._nodes))
+            # push!(planner._Log_result._vec_fsc_size, length(fsc._nodes))
+            push!(planner._Log_result._vec_fsc_size, length(fsc._prunned_node_list))
             push!(planner._Log_result._vec_upper_bound, U)
             if U - L < planner._epsilon
                 break
@@ -308,8 +370,7 @@ function EvaluationWithSimulationFSC(pomdp, fsc::FSC, discount::Float64, nb_sim:
         bool_random_pi = false
         bool_sim_i_invalid = false
 
-        while (discount^step)*(R_max - R_min) /(1 - discount)  > epsilon && isterminal(pomdp, s) == false
-        # while (discount^step)*(R_max - R_min) > epsilon && isterminal(pomdp, s) == false
+        while (discount^step)*(R_max - R_min) > epsilon || isterminal(pomdp, s) == true
             if bool_random_pi == true && bool_sim_i_invalid == false
                 bool_sim_i_invalid = true
                 sum_unvalid_search_threads[id_thread] += 1
@@ -364,15 +425,11 @@ function EvaluationWithSimulationFSC(pomdp, fsc::FSC, discount::Float64, nb_sim:
     ratio_unvalid_search = sum_unvalid_search / nb_sim
     avg_sum = sum_r / nb_sim
     avg_sum_valid_search = sum_r_valid / (nb_sim - sum_unvalid_search)
-    # println("avg sum:", avg_sum)
-    # println("avg sum valid search:", avg_sum_valid_search)
-    # println("unvalid search:", ratio_unvalid_search)
     push!(planner._Log_result._vec_valid_value, avg_sum_valid_search)
     push!(planner._Log_result._vec_unvalid_rate, ratio_unvalid_search)
 
     return avg_sum
 end
-
 
 function EvaluateBounds(pomdp, R_lower_bound, fsc::FSC, Q_learning_policy::Qlearning, discount::Float64, nb_sim::Int64, C_star::Int64, bool_PCA::Bool, epsilon::Float64)
     b0 = initialstate(pomdp)
@@ -391,8 +448,7 @@ function EvaluateBounds(pomdp, R_lower_bound, fsc::FSC, Q_learning_policy::Qlear
         s = rand(b0)
         nI = 1
 
-        # while (discount^step)*(R_max - R_min)/( 1 - discount) > epsilon && isterminal(pomdp, s) == false
-        while (discount^step)*(R_max - R_min) > epsilon && isterminal(pomdp, s) == false
+        while (discount^step)*(R_max - R_min) > epsilon || isterminal(pomdp, s) == true
             # a = GetBestAction(fsc._nodes[nI]._actions, fsc._nodes[nI])
             a = GetBestAction(fsc._nodes[nI])
             sp, o, r = @gen(:sp, :o, :r)(pomdp, s, a)
@@ -433,6 +489,7 @@ end
 function SimulationFSC(s, pomdp, fsc::FSC, discount::Float64, nI::Int64, R_lower_bound::Float64, step::Int64)
     sum_r = 0.0
     while (discount^step) > 0.01 && isterminal(pomdp, s) == false
+        # a = GetBestAction(fsc._nodes[nI]._actions, fsc._nodes[nI])
         a = GetBestAction(fsc._nodes[nI])
         sp, o, r = @gen(:sp, :o, :r)(pomdp, s, a)
         s = sp
@@ -464,11 +521,12 @@ function SimulationFSC(b0, pomdp, fsc::FSC, discount::Float64, planner::Continuo
     s = rand(b0)
     nI = 1
     while (discount^step) > 0.01 && isterminal(pomdp, s) == false
+        # a = GetBestAction(fsc._nodes[nI]._actions, fsc._nodes[nI])
         a = GetBestAction(fsc._nodes[nI])
         println("--- step ", step , " ---")
         println("s:", s)
         println("nI:", nI)
-        println("belief:", fsc._nodes[nI]._dict_weighted_samples)
+        # println("belief:", fsc._nodes[nI]._dict_weighted_samples)
         println("visit action:",fsc._nodes[nI]._visits_action)
         println("a:", a)
         sp, o, r = @gen(:sp, :o, :r)(pomdp, s, a)
@@ -566,6 +624,7 @@ function FindRLower(pomdp, b0, action_space)
 
     return max_min_r/(1-discount(pomdp)), max_min_a
 end
+
 
 function InitContinuousActionPOMDP(pomdp, b0, nb_particles_b0::Int64)
     particles_b0 = []
@@ -723,6 +782,18 @@ function GetValueQMDP(b::OrderedDict{Any, Float64}, Q_learning_policy::Qlearning
 end
 
 
+
+function GetValueQMDP(node::FscNode, Q_learning_policy::Qlearning)
+    value = 0.0
+
+    for (s, pb) in node._dict_weighted_samples
+        value += pb*GetV(Q_learning_policy, s)
+    end
+
+    return value 
+
+end
+
 function CheckAllActionVisit(node::FscNode)
     for (key, value) in node._visits_action
         if value == 0
@@ -733,9 +804,102 @@ function CheckAllActionVisit(node::FscNode)
 end
 
 
+function CollectSamplesAndBuildNewBeliefsWeightedParticles(pomdp,
+                                                            fsc::FSC,
+                                                            nI::Int64,
+                                                            a,
+                                                            nb_process_action_samples::Int64)
+
+	all_oI_weight = Dict{Int64, Float64}()
+	all_dict_weighted_samples = Dict{Int64, OrderedDict{Any, Float64}}()
+	sum_R_a = 0.0
+	sum_all_weights = 0.0
+
+	# prepare data for multi-thread computation 
+	num_threads = Threads.nthreads()
+	all_dict_weighted_samples_threads = Vector{Dict{Int64, OrderedDict{Any, Float64}}}()
+	all_oI_weight_threads = Vector{Dict{Int64, Float64}}()
+	sum_R_a_threads = zeros(Float64, num_threads)
+	sum_all_weights_threads = zeros(Float64, num_threads)
+	all_obs = Set{Int64}()
 
 
+	for i in 1:num_threads
+		push!(all_dict_weighted_samples_threads, Dict{Int64, OrderedDict{Any, Float64}}())
+		push!(all_oI_weight_threads, Dict{Int64, Float64}())
+	end
 
+	all_keys = collect(keys(fsc._nodes[nI]._dict_weighted_samples))
+	Threads.@threads for i in 1:length(all_keys)
+		id_thread = Threads.threadid()
+		s = all_keys[i]
+		w = fsc._nodes[nI]._dict_weighted_samples[s]
+		nb_sim = ceil(w * nb_process_action_samples)
+		w = 1.0
+		for i in 1:nb_sim
+			sp, o, r = @gen(:sp, :o, :r)(pomdp, s, a)
+			sum_R_a_threads[id_thread] += r * w
+			sum_all_weights_threads[id_thread] += w
+			if haskey(all_dict_weighted_samples_threads[id_thread], o)
+				all_oI_weight_threads[id_thread][o] += w
+				if haskey(all_dict_weighted_samples_threads[id_thread][o], sp)
+					all_dict_weighted_samples_threads[id_thread][o][sp] += w
+				else
+					all_dict_weighted_samples_threads[id_thread][o][sp] = w
+				end
+			else
+				all_dict_weighted_samples_threads[id_thread][o] = OrderedDict{Any, Float64}()
+				all_oI_weight_threads[id_thread][o] = w
+				all_dict_weighted_samples_threads[id_thread][o][sp] = w
+				push!(all_obs, o)
+			end
+		end
+	end
+	# merge threads data 
+	for id_thread in 1:num_threads
+		sum_R_a += sum_R_a_threads[id_thread]
+		sum_all_weights += sum_all_weights_threads[id_thread]
+	end
+	sum_R_a = sum_R_a / sum_all_weights
+
+
+	# merge threads data 
+	for o in all_obs
+		all_dict_weighted_samples[o] = OrderedDict{Int64, Float64}()
+		all_oI_weight[o] = 0.0
+	end
+
+	for id_thread in 1:num_threads
+		# for o in all_obs
+		# 	if haskey(all_dict_weighted_samples_threads[id_thread], o)
+		# 		all_dict_weighted_samples[o] = merge(+, all_dict_weighted_samples[o], all_dict_weighted_samples_threads[id_thread][o])
+		# 		all_oI_weight[o] += all_oI_weight_threads[id_thread][o]
+		# 	end
+		# end
+        for o in all_obs
+            if haskey(all_dict_weighted_samples_threads[id_thread], o)
+                if !haskey(all_dict_weighted_samples, o)
+                    all_dict_weighted_samples[o] = Dict()
+                end
+    
+                local_dict = all_dict_weighted_samples_threads[id_thread][o]
+                target_dict = all_dict_weighted_samples[o]
+    
+                for (key, value) in local_dict
+                    if haskey(target_dict, key)
+                        target_dict[key] += value
+                    else
+                        target_dict[key] = value
+                    end
+                end
+    
+                all_oI_weight[o] += all_oI_weight_threads[id_thread][o]
+            end
+        end
+	end
+
+	return sum_R_a, sum_all_weights, all_oI_weight, all_dict_weighted_samples
+end
 
 function CollectSamplesAndBuildNewBeliefs(bool_state_grid, 
                                             state_grid,
@@ -896,7 +1060,6 @@ function ProcessActions(n::FscNode, actions::Vector{Int64})
     end
 end
 
-
 function ProcessActions(n::FscNode, actions)
     for a in actions
         AddNewAction(n, a)
@@ -921,4 +1084,101 @@ function ExportLogData(planner::ContinuousPlannerPOMCGS, name::String)
                    unvalid_rate = planner._Log_result._vec_unvalid_rate[1:min_length],
                    fsc_size = planner._Log_result._vec_fsc_size[1:min_length])
     CSV.write(output_name, string.(df))
+end
+
+
+# only for discrete observations 
+
+function EvaluationWithSimulationFSC(b0, pomdp, fsc::FSC, discount::Float64, nb_sim::Int64, vec_evaluation_value, vec_valid_value, vec_unvalid_rate)
+
+	sum_r = 0.0
+	sum_r_valid = 0.0
+	sum_unvalid_search = 0
+
+	# set a default action
+	a_safe = GetBestAction(fsc._nodes[1]) # should be a safe action, or a greedy action 
+
+	for sim_i in 1:nb_sim
+		step = 0
+		sum_r_sim_i = 0.0
+		s = rand(b0)
+		nI = 1
+		bool_random_pi = false
+		bool_sim_i_invalid = false
+
+		while (discount^step) > 0.01 && isterminal(pomdp, s) == false
+			if bool_random_pi == true && bool_sim_i_invalid == false
+				bool_sim_i_invalid = true
+				sum_unvalid_search += 1
+			end
+
+			if nI == -1
+				bool_random_pi = true
+			elseif fsc._nodes[nI]._visits_node == 0
+				bool_random_pi = true
+			end
+
+			if bool_random_pi
+				# a = rand(fsc._action_space)
+				a = a_safe
+			else
+				a = GetBestAction(fsc._nodes[nI])
+			end
+
+			sp, o, r = @gen(:sp, :o, :r)(pomdp, s, a)
+			s = sp
+			sum_r_sim_i += (discount^step) * r
+
+			if haskey(fsc._eta[nI], Pair(a, o))
+				nI = fsc._eta[nI][Pair(a, o)]
+			else
+				bool_random_pi = true
+			end
+			step += 1
+		end
+		sum_r += sum_r_sim_i
+		if bool_sim_i_invalid == false
+			sum_r_valid += sum_r_sim_i
+		end
+	end
+
+	push!(vec_evaluation_value, sum_r / nb_sim)
+	push!(vec_valid_value, sum_r_valid / (nb_sim - sum_unvalid_search))
+	push!(vec_unvalid_rate, sum_unvalid_search / nb_sim)
+
+	return sum_r / nb_sim
+
+end
+
+function EvaluateUpperBound(b0, pomdp, fsc::FSC, Q_learning_policy::Qlearning, discount::Float64, nb_sim::Int64, C_star::Int64)
+	sum_r = 0.0
+
+	for sim_i in 1:nb_sim
+		step = 0
+		sum_r_sim_i = 0.0
+		s = rand(b0)
+		nI = 1
+
+		while (discount^step) > 0.01 && isterminal(pomdp, s) == false
+			a = GetBestAction(fsc._nodes[nI])
+			if (a == -1)
+				sum_r_sim_i += (discount^step) * GetValueQMDP(fsc._nodes[nI], Q_learning_policy)
+				break
+			end
+
+			sp, o, r = @gen(:sp, :o, :r)(pomdp, s, a)
+			s = sp
+			if haskey(fsc._eta[nI], Pair(a, o)) && fsc._nodes[nI]._visits_node > C_star
+				nI = fsc._eta[nI][Pair(a, o)]
+				sum_r_sim_i += (discount^step) * r
+			else
+				sum_r_sim_i += (discount^step) * GetValueQMDP(fsc._nodes[nI], Q_learning_policy)
+				break
+			end
+			step += 1
+		end
+		sum_r += sum_r_sim_i
+	end
+
+	return sum_r / nb_sim
 end

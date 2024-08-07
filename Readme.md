@@ -8,8 +8,7 @@ This repository contains the anonymous submission for the NeurIPS article titled
 
 - **ContinuousPOMCGS**: This folder contains the source codes for POMCGS applied to continuous POMDPs.
 - **NaivePOMCGS**: This folder contains the source codes for POMCGS applied to discrete POMDPs.
-
-Jupyter notebooks are provided for running each benchmark experiment discussed in the article.
+- **Benchmarks**: This folder contains Jupyter notebooks for running each benchmark experiment discussed in the article.
 
 ## Getting Started
 

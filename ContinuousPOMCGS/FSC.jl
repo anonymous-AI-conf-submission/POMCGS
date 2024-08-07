@@ -30,6 +30,7 @@ mutable struct FSC
     _action_space
     _map_discrete2continuous_states::Dict{Vector{Float64}, Vector{Any}}
     _belief_search_root::BeliefSearchTreeNode
+    _flag_unexpected_obs::Int64
     _prunned_node_list::Vector{Int64}
 end
 
@@ -142,6 +143,7 @@ function InitFSC(max_accept_belief_gap::Float64, max_node_size::Int64, action_sp
     init_nodes = Vector{FscNode}()
     init_collection_continuous_states = Dict{Vector{Float64}, Vector{Any}}()
     init_belief_search_root = InitBeliefSearchTreeNode(-1)
+    flag_unexpected_obs = -999
     init_prunned_node_list = Vector{Int64}()
     return FSC(init_eta,
                 init_eta_search,
@@ -151,6 +153,7 @@ function InitFSC(max_accept_belief_gap::Float64, max_node_size::Int64, action_sp
                 action_space,
                 init_collection_continuous_states,
                 init_belief_search_root,
+                flag_unexpected_obs,
                 init_prunned_node_list)
 
 end    
