@@ -437,21 +437,23 @@ function StoreAllAbstractObs(fsc::FSC, nI::Int64, a, all_abstract_obs::Set{Vecto
     end
 end
 
+
 function SearchOrInsertBelief(fsc::FSC, 
-                              belief::OrderedDict{Any, Float64}, 
-                              search_node_index::Int64, 
-                              distance::Float64, 
-                              depth::Int64)
-   
-    compare_distance = distance*0.8
+                            belief::OrderedDict{Any, Float64}, 
+                            search_node_index::Int64, 
+                            distance::Float64, 
+                            depth::Int64)
+    compare_distance = distance * 0.8
     min_distance = typemax(Float64)
     min_node_index = -1
 
-
     num_threads = Threads.nthreads()
-    min_distance_node_i_threads = zeros(Int64, num_threads)
-    min_distance_threads  = ones(Float64, num_threads)*typemax(Float64)
 
+    # Preallocate thread-local arrays to avoid repeated allocations
+    min_distance_node_i_threads = zeros(Int64, num_threads)
+    min_distance_threads = fill(typemax(Float64), num_threads)
+
+    # Parallel loop to compute distances and find the minimum distance per thread
     Threads.@threads for i in 1:length(fsc._eta_search[search_node_index])
         id_thread = Threads.threadid()
         child_node_i = fsc._eta_search[search_node_index][i]
@@ -462,28 +464,31 @@ function SearchOrInsertBelief(fsc::FSC,
         end
     end
 
+    # Aggregate results from all threads to find the global minimum distance
     for id_thread in 1:num_threads
-        if min_distance > min_distance_threads[id_thread] 
-            min_distance = min_distance_threads[id_thread] 
+        if min_distance > min_distance_threads[id_thread]
+            min_distance = min_distance_threads[id_thread]
             min_node_index = min_distance_node_i_threads[id_thread]
         end
     end
 
-
-    if (min_distance < fsc._max_accept_belief_gap)
+    # Check if the minimum distance is within the acceptable range
+    if min_distance < fsc._max_accept_belief_gap
         return true, min_node_index
     end
 
-    if (min_distance > compare_distance) 
+    # Insert a new node if the distance exceeds the comparison threshold
+    if min_distance > compare_distance
         n_next = CreateNode(belief)
         push!(fsc._nodes, n_next)
         n_nextI = length(fsc._nodes)
-        push!(fsc._eta, Dict{Pair{Any, Int64},Int64}()) #add one row for n_nextI in _eta
-        fsc._eta_search[n_nextI] = Vector{Int64}() #add one row for n_nextI in _eta_search
-        push!(fsc._eta_search[search_node_index] , n_nextI)
+        push!(fsc._eta, Dict{Pair{Any, Int64}, Int64}())  # Add one row for n_nextI in _eta
+        fsc._eta_search[n_nextI] = Vector{Int64}()  # Add one row for n_nextI in _eta_search
+        push!(fsc._eta_search[search_node_index], n_nextI)
         return false, n_nextI
     else
-        SearchOrInsertBelief(fsc, belief, min_node_index, distance, depth+1)
+    # Recursive call to continue searching at the next level
+        return SearchOrInsertBelief(fsc, belief, min_node_index, distance, depth + 1)
     end
 end
 
