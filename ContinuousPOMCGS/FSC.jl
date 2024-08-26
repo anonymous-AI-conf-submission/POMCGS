@@ -10,7 +10,7 @@ mutable struct FscNode
     _visits_action::Dict{Any,Int64}
     _visits_node::Int64
     _V_node::Float64
-    _dict_weighted_samples::OrderedDict{Any, Float64}
+    _dict_weighted_samples::Dict{Any, Float64}
     _PCA_Ms::Dict{Any, Any}  # a -> PCA model
     _best_action::Any
     _abstract_observations::Dict{Any, Vector{Vector{Float64}}} # a -> collection_obs_centroid
@@ -61,7 +61,7 @@ function InitFscNode(action_space)
     init_V_node = 0.0
     # nb_particles = 0
     # --- Weighted Particles ----
-    init_dict_weighted_particles = OrderedDict{Any, Float64}()
+    init_dict_weighted_particles = Dict{Any, Float64}()
     # --- abstract observations ---
     return FscNode( init_actions, 
                     # nb_particles,
@@ -92,7 +92,7 @@ function InitFscNode()
     init_visits_node = 0
     init_V_node = 0.0
     # --- Weighted Particles ----
-    init_dict_weighted_particles = OrderedDict{Any, Float64}()
+    init_dict_weighted_particles = Dict{Any, Float64}()
     # --- abstract observations ---
     return FscNode( init_actions, 
                     init_Q_action,
@@ -117,7 +117,7 @@ function AddNewAction(n::FscNode, a)
     end
 end
 
-function CreateNode(weighted_b::OrderedDict{Any, Float64})
+function CreateNode(weighted_b::Dict{Any, Float64})
     node = InitFscNode()
     node._dict_weighted_samples = weighted_b
     return node
@@ -143,8 +143,8 @@ function InitFSC(max_accept_belief_gap::Float64, max_node_size::Int64, action_sp
     init_nodes = Vector{FscNode}()
     init_collection_continuous_states = Dict{Vector{Float64}, Vector{Any}}()
     init_belief_search_root = InitBeliefSearchTreeNode(-1)
-    flag_unexpected_obs = -999
     init_prunned_node_list = Vector{Int64}()
+    flag_unexpected_obs = typemin(Int64)
     return FSC(init_eta,
                 init_eta_search,
                 init_nodes,
@@ -158,19 +158,6 @@ function InitFSC(max_accept_belief_gap::Float64, max_node_size::Int64, action_sp
 
 end    
 
-function GetBestAction(action_space, n::FscNode)
-    Q_max = typemin(Float64)
-    best_a = rand(action_space)
-    for (key, value) in n._Q_action
-        if value > Q_max && n._visits_action[key] != 0
-            Q_max = value
-            best_a = key
-        end
-    end
-    
-    return best_a
-end
-
 function GetBestAction(n::FscNode)
     Q_max = typemin(Float64)
     best_a = rand(n._actions)
@@ -183,24 +170,6 @@ function GetBestAction(n::FscNode)
     
     return best_a
 end
-
-# function GetBestAction(n::FscNode)
-#     if isnothing(n._best_action)
-#         Q_max = typemin(Float64)
-#         best_a = rand(keys(n._Q_action))
-#         for (key, value) in n._Q_action
-#             if value > Q_max && n._visits_action[key] != 0
-#                 Q_max = value
-#                 best_a = key
-#             end
-#         end
-    
-#         n._best_action = best_a
-#         return best_a
-#     else 
-#         return n._best_action
-#     end
-# end
 
 function FindSimiliarBelief(fsc::FSC, new_weighted_particles::Dict{Any, Float64}, b_gap_max::Float64)
 
@@ -347,7 +316,7 @@ function ComputeDistance(vec_1, vec_2)
     return distance
 end
 
-function ComputeDistance(dict_1::OrderedDict{Any, Float64}, dict_2::OrderedDict{Any, Float64})
+function ComputeDistance(dict_1::Dict{Any, Float64}, dict_2::Dict{Any, Float64})
     sum = 0.0
     for (key, value) in dict_1
         if haskey(dict_2, key)
@@ -437,23 +406,21 @@ function StoreAllAbstractObs(fsc::FSC, nI::Int64, a, all_abstract_obs::Set{Vecto
     end
 end
 
-
 function SearchOrInsertBelief(fsc::FSC, 
-                            belief::OrderedDict{Any, Float64}, 
-                            search_node_index::Int64, 
-                            distance::Float64, 
-                            depth::Int64)
-    compare_distance = distance * 0.8
+                              belief::Dict{Any, Float64}, 
+                              search_node_index::Int64, 
+                              distance::Float64, 
+                              depth::Int64)
+   
+    compare_distance = distance*0.8
     min_distance = typemax(Float64)
     min_node_index = -1
 
+
     num_threads = Threads.nthreads()
-
-    # Preallocate thread-local arrays to avoid repeated allocations
     min_distance_node_i_threads = zeros(Int64, num_threads)
-    min_distance_threads = fill(typemax(Float64), num_threads)
+    min_distance_threads  = ones(Float64, num_threads)*typemax(Float64)
 
-    # Parallel loop to compute distances and find the minimum distance per thread
     Threads.@threads for i in 1:length(fsc._eta_search[search_node_index])
         id_thread = Threads.threadid()
         child_node_i = fsc._eta_search[search_node_index][i]
@@ -464,35 +431,32 @@ function SearchOrInsertBelief(fsc::FSC,
         end
     end
 
-    # Aggregate results from all threads to find the global minimum distance
     for id_thread in 1:num_threads
-        if min_distance > min_distance_threads[id_thread]
-            min_distance = min_distance_threads[id_thread]
+        if min_distance > min_distance_threads[id_thread] 
+            min_distance = min_distance_threads[id_thread] 
             min_node_index = min_distance_node_i_threads[id_thread]
         end
     end
 
-    # Check if the minimum distance is within the acceptable range
-    if min_distance < fsc._max_accept_belief_gap
+
+    if (min_distance < fsc._max_accept_belief_gap)
         return true, min_node_index
     end
 
-    # Insert a new node if the distance exceeds the comparison threshold
-    if min_distance > compare_distance
+    if (min_distance > compare_distance) 
         n_next = CreateNode(belief)
         push!(fsc._nodes, n_next)
         n_nextI = length(fsc._nodes)
-        push!(fsc._eta, Dict{Pair{Any, Int64}, Int64}())  # Add one row for n_nextI in _eta
-        fsc._eta_search[n_nextI] = Vector{Int64}()  # Add one row for n_nextI in _eta_search
-        push!(fsc._eta_search[search_node_index], n_nextI)
+        push!(fsc._eta, Dict{Pair{Any, Int64},Int64}()) #add one row for n_nextI in _eta
+        fsc._eta_search[n_nextI] = Vector{Int64}() #add one row for n_nextI in _eta_search
+        push!(fsc._eta_search[search_node_index] , n_nextI)
         return false, n_nextI
     else
-    # Recursive call to continue searching at the next level
-        return SearchOrInsertBelief(fsc, belief, min_node_index, distance, depth + 1)
+        SearchOrInsertBelief(fsc, belief, min_node_index, distance, depth+1)
     end
 end
 
-function SearchOrInsertBelief(fsc::FSC, new_weighted_particles::OrderedDict{Any, Float64}, b_gap_max::Float64)
+function SearchOrInsertBelief(fsc::FSC, new_weighted_particles::Dict{Any, Float64}, b_gap_max::Float64)
 
     min_distance_node_i = -1
     min_distance = typemax(Float64)
@@ -544,7 +508,7 @@ function SearchOrInsertBelief(fsc::FSC, new_weighted_particles::OrderedDict{Any,
     end
 end
 
-function SearchOrInsertBeliefWithPrunnedNodes(fsc::FSC, new_weighted_particles::OrderedDict{Any, Float64}, b_gap_max::Float64)
+function SearchOrInsertBeliefWithPrunnedNodes(fsc::FSC, new_weighted_particles::Dict{Any, Float64}, b_gap_max::Float64)
 
     min_distance_node_i = -1
     min_distance = typemax(Float64)
